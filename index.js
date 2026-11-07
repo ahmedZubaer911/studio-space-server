@@ -3,8 +3,10 @@ import { MongoClient } from "mongodb";
 import cors from "cors";
 import "dotenv/config";
 
+import studioRoutes, { setStudiosCollection } from "./routes/studioRoutes.js";
+
 const app = express();
-const port = 8000; //http://localhost:8000
+const port = 8000;
 
 app.use(
   cors({
@@ -17,47 +19,31 @@ app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URL);
 
-let studiosCollection;
-export async function connectToMongoDB() {
+async function connectToMongoDB() {
   try {
     await client.connect();
 
-    console.log("You successfully connected to MongoDB!");
+    const db = client.db("studio_space");
+    const studiosCollection = db.collection("StudioSpace");
 
-    const db = client.db(); 
-    studiosCollection = db.collection("studios");
+    setStudiosCollection(studiosCollection);
 
-    console.log("Studios collection is ready!");
-
-    return db;
-  } catch (err) {
-    console.error("MongoDB connection failed:", err);
+    console.log("MongoDB connected successfully!");
+  } catch (error) {
+    console.error("MongoDB connection failed:", error);
     process.exit(1);
   }
 }
 
+// Root route
 app.get("/", (req, res) => {
-  res.send({ message: `StudioSpace Server is running fine!` });
+  res.send({
+    message: "StudioSpace server is running fine!",
+  });
 });
 
-app.get("/api/studios", async (req, res) => {
-  try {
-    const studios = await studiosCollection.find({}).toArray();
-
-    res.status(200).send({
-      success: true,
-      count: studios.length,
-      data: studios,
-    });
-  } catch (err) {
-    console.error("Failed to fetch studios:", err);
-
-    res.status(500).send({
-      success: false,
-      message: "Failed to retrieve studios",
-    });
-  }
-});
+// Studio routes
+app.use("/api/studios", studioRoutes);
 
 async function startServer() {
   await connectToMongoDB();
