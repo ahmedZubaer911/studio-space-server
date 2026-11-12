@@ -29,6 +29,31 @@ router.get("/", async (req, res) => {
     // Build MongoDB query
     const query = {};
 
+    // Validate price range
+    const min =
+      minPrice === undefined || minPrice === "" ? undefined : Number(minPrice);
+
+    const max =
+      maxPrice === undefined || maxPrice === "" ? undefined : Number(maxPrice);
+
+    if (
+      (min !== undefined &&
+        (!Number.isFinite(min) || min < 0 || min > 100000)) ||
+      (max !== undefined && (!Number.isFinite(max) || max < 0 || max > 100000))
+    ) {
+      return res.status(400).send({
+        success: false,
+        message: "Price must be between 0 and 100,000.",
+      });
+    }
+
+    if (min !== undefined && max !== undefined && max < min) {
+      return res.status(400).send({
+        success: false,
+        message: "Maximum price cannot be lower than minimum price.",
+      });
+    }
+
     if (search) {
       const searchRegex = new RegExp(
         search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
@@ -43,7 +68,11 @@ router.get("/", async (req, res) => {
     }
 
     if (category) {
-      query.category = category;
+      if (category.toLowerCase() === "others") {
+        query.category = { $in: [null, ""] };
+      } else {
+        query.category = category;
+      }
     }
 
     if (location) {
@@ -53,11 +82,16 @@ router.get("/", async (req, res) => {
       };
     }
 
-    if (minPrice || maxPrice) {
+    if (min !== undefined || max !== undefined) {
       query.hourlyRate = {};
 
-      if (minPrice) query.hourlyRate.$gte = Number(minPrice);
-      if (maxPrice) query.hourlyRate.$lte = Number(maxPrice);
+      if (min !== undefined) {
+        query.hourlyRate.$gte = min;
+      }
+
+      if (max !== undefined) {
+        query.hourlyRate.$lte = max;
+      }
     }
 
     // Sorting
@@ -98,21 +132,24 @@ router.get("/", async (req, res) => {
   }
 });
 
-
 // GET six featured studios
 router.get("/featured", async (req, res) => {
-    try {
-        const studios = await studiosCollection.find({}).limit(6).toArray();
+  try {
+    const featuredStudios = await studiosCollection
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(6)
+      .toArray();
 
-        res.status(200).send({
+    res.status(200).json({
       success: true,
-      count: studios.length,
-      data: studios,
+      count: featuredStudios.length,
+      data: featuredStudios,
     });
   } catch (error) {
-    console.error("Failed to fetch featured studios:", error);
+    console.error("Featured studios error:", error);
 
-    res.status(500).send({
+    res.status(500).json({
       success: false,
       message: "Failed to retrieve featured studios.",
     });
@@ -130,9 +167,9 @@ router.get("/categories", async (req, res) => {
       data: categories.sort(),
     });
   } catch (error) {
-      console.error("Failed to fetch categories:", error);
+    console.error("Failed to fetch categories:", error);
 
-      res.status(500).send({
+    res.status(500).send({
       success: false,
       message: "Failed to retrieve categories.",
     });
@@ -174,6 +211,125 @@ router.get("/:id", async (req, res) => {
     res.status(500).send({
       success: false,
       message: "Failed to retrieve studio.",
+    });
+  }
+});
+
+// POST a new studio
+router.post("/", async (req, res) => {
+  try {
+    const {
+      title,
+      category,
+      hourlyRate,
+      securityDeposit,
+      maxCapacity,
+      location,
+      imageUrl,
+      amenities,
+      overview,
+    } = req.body;
+
+    // Validate required text fields
+    if (
+      !title?.trim() ||
+      !category?.trim() ||
+      !location?.trim() ||
+      !overview?.trim() ||
+      !imageUrl?.trim()
+    ) {
+      return res.status(400).send({
+        success: false,
+        message: "Please provide all required studio information.",
+      });
+    }
+
+    // Validate numeric fields
+    const rate = Number(hourlyRate);
+    const deposit = Number(securityDeposit);
+    const capacity = Number(maxCapacity);
+
+    if (
+      !Number.isFinite(rate) ||
+      rate <= 0 ||
+      rate > 100000 ||
+      !Number.isFinite(deposit) ||
+      deposit < 0 ||
+      deposit > 100000 ||
+      !Number.isInteger(capacity) ||
+      capacity <= 0
+    ) {
+      return res.status(400).send({
+        success: false,
+        message: "Please provide valid price, deposit, and capacity values.",
+      });
+    }
+
+    // Validate image URL
+    let parsedImageUrl;
+
+    try {
+      parsedImageUrl = new URL(imageUrl);
+    } catch {
+      return res.status(400).send({
+        success: false,
+        message: "Please provide a valid image URL.",
+      });
+    }
+
+    if (!["http:", "https:"].includes(parsedImageUrl.protocol)) {
+      return res.status(400).send({
+        success: false,
+        message: "Image URL must use HTTP or HTTPS.",
+      });
+    }
+
+    // Validate amenities
+    if (
+      amenities !== undefined &&
+      (!Array.isArray(amenities) ||
+        !amenities.every((item) => typeof item === "string" && item.trim()))
+    ) {
+      return res.status(400).send({
+        success: false,
+        message: "Amenities must be an array of valid strings.",
+      });
+    }
+
+    // Prepare studio document
+    const newStudio = {
+      title: title.trim(),
+      category: category.trim(),
+      hourlyRate: rate,
+      securityDeposit: deposit,
+      maxCapacity: capacity,
+      location: location.trim(),
+      imageUrl: imageUrl.trim(),
+      amenities: (amenities || []).map((item) => item.trim()),
+      overview: overview.trim(),
+      rating: 0,
+      reviewCount: 0,
+      isFeatured: false,
+      createdAt: new Date(),
+    };
+
+    // Insert into MongoDB
+    const result = await studiosCollection.insertOne(newStudio);
+
+    res.status(201).send({
+      success: true,
+      message: "Studio added successfully.",
+      data: {
+        ...newStudio,
+        _id: result.insertedId,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to add studio:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to add studio.",
     });
   }
 });
